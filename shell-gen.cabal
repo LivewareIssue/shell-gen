@@ -1,0 +1,75 @@
+cabal-version: 3.0
+name: shell-gen
+version: 0.1.0.0
+license: MIT
+license-file: LICENSE
+author: Tom Bates
+maintainer: tombates@fb.com
+build-type: Simple
+extra-doc-files: CHANGELOG.md
+
+common warnings
+    ghc-options: -Wall
+
+common extensions
+    default-extensions:
+        TypeApplications,
+        ScopedTypeVariables,
+        FlexibleInstances,
+        NoFieldSelectors,
+        DuplicateRecordFields,
+        LambdaCase,
+        PatternSynonyms,
+        NamedFieldPuns,
+        TupleSections,
+
+executable sg
+    import: warnings
+    import: extensions
+    build-depends:
+        base ^>= 4.18.0.0,
+        aeson ^>= 2.2.1.0,
+        http-conduit ^>= 2.3.8.3,
+        bytestring ^>= 0.11.4.0,
+        haskeline ^>= 0.8.2.1,
+        microlens ^>= 0.4.13.1,
+        process ^>= 1.6.18.0,
+        sg-lib,
+    hs-source-dirs: sg
+    main-is: Main.hs
+    default-language: Haskell2010
+    exposed-modules:
+        Main
+    ghc-options: -O2
+
+library sg-lib
+    import: warnings
+    import: extensions
+    build-depends:
+        base ^>= 4.18.0.0,
+        aeson ^>= 2.2.1.0,
+        microlens ^>= 0.4.13.1,
+        microlens-th ^>= 0.4.3.14,
+        template-haskell ^>= 2.20.0.0,
+    hs-source-dirs: sg-lib
+    default-language: Haskell2010
+    exposed-modules:
+        SG,
+        SG.Request,
+        SG.Message,
+        SG.Role,
+        SG.Response,
+        SG.LensRules,
+
+test-suite sg-test
+    import: warnings
+    import: extensions
+    type: exitcode-stdio-1.0
+    main-is: Spec.hs
+    build-depends:
+        base ^>= 4.18.0.0,
+        QuickCheck ^>= 2.14.3,
+        hspec ^>= 2.11.5,
+        sg-lib,
+    hs-source-dirs: sg-test
+    default-language: Haskell2010
