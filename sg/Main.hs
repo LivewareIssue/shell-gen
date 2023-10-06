@@ -24,6 +24,9 @@ import qualified Network.HTTP.Simple as HTTP
   , setRequestMethod
   )
 
+import System.Directory (getCurrentDirectory)
+import System.Info (os)
+
 import SG.Role (Role (..))
 import SG.Request (Request (..))
 import SG.Message (Message (..))
@@ -35,10 +38,18 @@ main :: IO ()
 main = do
   apiKey <- getAPIKeyFromEnvironmentVariable
     `catch` handleUnauthenticated
+
   systemMessage <- getSystemMessage
     `catch` handleSystemMessageMissing
+
+  environmentMessage <- getEnvironmentMessage
+
   getArgs >>= \case
-    [prompt] -> sendChatCompletionRequest systemMessage apiKey prompt
+    [prompt] -> sendChatCompletionRequest
+      systemMessage
+      environmentMessage
+      apiKey
+      prompt
     _ -> exitFailure
 
 getHTTPRequest :: HTTP.RequestHeaders -> Request -> IO HTTP.Request
@@ -54,8 +65,8 @@ getHTTPRequest headers request
     chatCompletionEndpointURL :: String
     chatCompletionEndpointURL = "https://api.openai.com/v1/chat/completions"
 
-sendChatCompletionRequest :: Message -> String -> String -> IO ()
-sendChatCompletionRequest systemMessage apiKey userPrompt = do
+sendChatCompletionRequest :: Message -> Message -> String -> String -> IO ()
+sendChatCompletionRequest systemMessage environmentMessage apiKey userPrompt = do
   httpRequest <- getHTTPRequest (getRequestHeaders apiKey) request
   httpResonse <- httpJSON httpRequest
   case (fromJSON $ HTTP.getResponseBody httpResonse) of
@@ -75,6 +86,7 @@ sendChatCompletionRequest systemMessage apiKey userPrompt = do
       { model
       , messages =
         [ systemMessage
+        , environmentMessage
         , userMessage
         ]
       }
@@ -90,9 +102,14 @@ confirmCommand = runInputT defaultSettings . getInputLineWithInitial mempty . (,
 
 getRequestHeaders :: String -> HTTP.RequestHeaders
 getRequestHeaders apiKey =
-  [ ("Content-Type", "application/json")
+  [ ( "Content-Type"
+    , "application/json"
+    )
   , ("Authorization"
-    , ByteString.concat ["Bearer ", ByteString.pack apiKey]
+    , ByteString.concat
+      [ "Bearer "
+      , ByteString.pack apiKey
+      ]
     )
   ]
 
@@ -111,6 +128,19 @@ getSystemMessage = do
   return $! Message
     { role = System
     , content
+    }
+
+getEnvironmentMessage :: IO Message
+getEnvironmentMessage = do
+  cwd <- getCurrentDirectory
+  shell <- getEnv "SHELL"
+  return $ Message
+    { role = System
+    , content = unlines
+      [ printf "cwd: %s" cwd
+      , printf "os: %s" os
+      , printf "shell: %s" shell
+      ]
     }
 
 handleUnauthenticated :: IOError -> IO a
