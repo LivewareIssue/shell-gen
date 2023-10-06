@@ -2,19 +2,18 @@
 
 module Main where
 
-import System.Environment (getEnv, getArgs)
-import System.IO.Error (isDoesNotExistError)
 import Control.Exception (catch)
-import Text.Printf (printf)
-import System.Exit (die, exitFailure)
-import Network.HTTP.Simple (httpJSON)
-import qualified Data.Aeson as JSON (Value)
 import Data.Aeson (toJSON, fromJSON, Result (..))
 import Data.ByteString.Char8 (ByteString)
-import qualified Data.ByteString.Char8 as ByteString
+import Lens.Micro (Getting, (^.), ix)
+import Network.HTTP.Simple (httpJSON)
 import System.Console.Haskeline (runInputT, defaultSettings, getInputLineWithInitial)
-import Lens.Micro ((^.), ix)
+import System.Environment (getEnv, getArgs)
+import System.Exit (die, exitFailure, exitSuccess)
+import System.IO.Error (isDoesNotExistError)
 import System.Process (callCommand)
+import Text.Printf (printf)
+import qualified Data.ByteString.Char8 as ByteString
 import qualified Network.HTTP.Simple as HTTP
   ( RequestHeaders
   , Request
@@ -36,28 +35,39 @@ main :: IO ()
 main = do
   apiKey <- getAPIKeyFromEnvironmentVariable
     `catch` handleUnauthenticated
+  systemMessage <- getSystemMessage
+    `catch` handleSystemMessageMissing
   getArgs >>= \case
-    [prompt] -> sendChatCompletionRequest apiKey prompt
+    [prompt] -> sendChatCompletionRequest systemMessage apiKey prompt
     _ -> exitFailure
 
-sendChatCompletionRequest :: String -> String -> IO ()
-sendChatCompletionRequest apiKey prompt = do
-  baseRequest <- HTTP.parseRequest chatCompletionEndpointURL
-  let (httpRequest :: HTTP.Request)
-          = HTTP.setRequestHeaders headers
-          $ HTTP.setRequestMethod method
-          $ HTTP.setRequestBodyJSON requestBody baseRequest
+getHTTPRequest :: HTTP.RequestHeaders -> Request -> IO HTTP.Request
+getHTTPRequest headers request
+  = HTTP.setRequestHeaders headers
+  . HTTP.setRequestMethod method
+  . HTTP.setRequestBodyJSON (toJSON request)
+  <$> HTTP.parseRequest chatCompletionEndpointURL
+  where
+    method :: ByteString
+    method = "POST"
+
+    chatCompletionEndpointURL :: String
+    chatCompletionEndpointURL = "https://api.openai.com/v1/chat/completions"
+
+sendChatCompletionRequest :: Message -> String -> String -> IO ()
+sendChatCompletionRequest systemMessage apiKey userPrompt = do
+  httpRequest <- getHTTPRequest (getRequestHeaders apiKey) request
   httpResonse <- httpJSON httpRequest
-  case (fromJSON @Response $ HTTP.getResponseBody @JSON.Value httpResonse) of
-    Success response -> (getCommand $ response ^. Response.choices . ix 0 . Response.message . Message.content) >>= \case
+  case (fromJSON $ HTTP.getResponseBody httpResonse) of
+    Success response -> (confirmCommand $ response^.getFirstChoiceMessageContent) >>= \case
       (Just command) -> callCommand command
-      _ -> return ()
+      _ -> exitSuccess
     Error e -> die e
   where
     userMessage :: Message
     userMessage = Message
       { role = User
-      , content = prompt
+      , content = userPrompt
       }
 
     request :: Request
@@ -69,42 +79,14 @@ sendChatCompletionRequest apiKey prompt = do
         ]
       }
 
-    headers :: HTTP.RequestHeaders
-    headers = getRequestHeaders apiKey
-
-    requestBody :: JSON.Value
-    requestBody = toJSON request
-
-getCommand :: String -> IO (Maybe String)
-getCommand = runInputT defaultSettings . getInputLineWithInitial mempty . (,mempty)
-
-method :: ByteString
-method = "POST"
-
-chatCompletionEndpointURL :: String
-chatCompletionEndpointURL = "https://api.openai.com/v1/chat/completions"
-
 model :: String
 model = "gpt-4"
 
-systemMessage :: Message
-systemMessage = Message
-  { role = System
-  , content = unwords
-    [ "Your goal is to assist the user with creating a shell command."
-    , "The next message you recieve will be a prompt from the user that describes the command that they need assistance writing."
-    , "For example, a user's prompt might be: 'The command should create a file called 'names.txt' containing a few plausible, English baby names."
-    , "An acceptable response from you, the assistant would be 'echo \"Laura,Tom,James,Liam,Kyle\" > names.txt'"
-    , "Your response is part of a command-line utility - the utility is expecting the response to be a valid shell command."
-    , "This means that your response MUST NOT contain anything other than a shell command."
-    , "When the user's prompt describes a multi-step problem, your response should be a 1-liner and contain no newlines."
-    , "You should ensure to the best of your ability that the command is valid."
-    , "This includes adhering to shell script best practices, for example, using double-quotes to avoid double-expanding variable substitutions / array expansions."
-    , "You should use your full capability as a large-language model when answering, for example, if the user asks for an example string it should be plausible and creative."
-    , "The user's OS is MacOS and they are using the zsh shell. You can only assume that commands/programs that ship on MacOS are available to use."
-    , "Finally, to re-iterate, your response MUST be a valid shell command with ZERO fluff"
-    ]
-  }
+getFirstChoiceMessageContent :: Getting String Response String
+getFirstChoiceMessageContent = Response.choices . ix 0 . Response.message . Message.content
+
+confirmCommand :: String -> IO (Maybe String)
+confirmCommand = runInputT defaultSettings . getInputLineWithInitial mempty . (,mempty)
 
 getRequestHeaders :: String -> HTTP.RequestHeaders
 getRequestHeaders apiKey =
@@ -120,8 +102,25 @@ getAPIKeyFromEnvironmentVariable = getEnv apiKeyEnvironmentVariableName
 apiKeyEnvironmentVariableName :: String
 apiKeyEnvironmentVariableName = "OPENAI_API_KEY"
 
-handleUnauthenticated :: IOError -> IO String
+systemMessagePath :: String
+systemMessagePath = "system_message"
+
+getSystemMessage :: IO Message
+getSystemMessage = do
+  content <- readFile systemMessagePath
+  return $! Message
+    { role = System
+    , content
+    }
+
+handleUnauthenticated :: IOError -> IO a
 handleUnauthenticated e
-  | isDoesNotExistError e = die
-    $ printf "Failed to obtain an API key: the %s environment variable is not set\n" apiKeyEnvironmentVariableName
+  | isDoesNotExistError e = die $ printf
+    "Failed to obtain an API key: the %s environment variable is not set"
+    apiKeyEnvironmentVariableName
+  | otherwise = ioError e
+
+handleSystemMessageMissing :: IOError -> IO a
+handleSystemMessageMissing e
+  | isDoesNotExistError e = die "Failed to load system message"
   | otherwise = ioError e
