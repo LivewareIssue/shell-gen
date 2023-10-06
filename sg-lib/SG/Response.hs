@@ -8,8 +8,8 @@ import Lens.Micro.TH (makeLensesWith)
 import Data.Aeson.TH (deriveJSON, defaultOptions)
 
 data Choice = Choice
-  { finish_reason :: String
-  , message :: Message
+  { finish_reason :: !String
+  , message :: !Message
   }
   deriving (Eq, Show, Ord)
 
